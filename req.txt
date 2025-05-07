@@ -1,6 +1,9 @@
 streamlit
 langchain
 faiss-cpu
-openai
-transformers
 sentence-transformers
+transformers
+torch
+PyDictionary
+numexpr
+python-dotenv

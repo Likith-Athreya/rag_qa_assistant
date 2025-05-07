@@ -1,97 +1,151 @@
-# RAG-Powered Multi-Agent Q&A Assistant (using Hugging Face)
-
-# --- Step 1: Data Ingestion & Chunking ---
 import os
 import glob
+import streamlit as st
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.document_loaders import TextLoader
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
-
-# Load and chunk documents
-def ingest_documents(path="docs"):
-    files = glob.glob(os.path.join(path, "*.txt"))
-    docs = []
-    for file in files:
-        loader = TextLoader(file)
-        docs.extend(loader.load())
-
-    splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    chunks = splitter.split_documents(docs)
-    return chunks
-
-# --- Step 2: Vector Store & Retrieval ---
-def build_vector_store(chunks):
-    embeddings = HuggingFaceEmbeddings()
-    vectordb = FAISS.from_documents(chunks, embeddings)
-    return vectordb
-
-def retrieve_top_k(vectordb, query, k=3):
-    return vectordb.similarity_search(query, k=k)
-
-# --- Step 3: LLM Integration using Hugging Face (Local Model) ---
 from langchain.llms import HuggingFacePipeline
-from langchain.chains.question_answering import load_qa_chain
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from numexpr import evaluate
+from PyDictionary import PyDictionary
 
-model_name = "tiiuae/falcon-rw-1b"  # lightweight and free to run locally
+# --- Config ---
+MODEL_NAME = "distilgpt2"  # Lightweight model for local use
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
 
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
-pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=512)
+# --- Helper Functions ---
+def load_documents():
+    """Load and split documents from the 'docs' folder."""
+    try:
+        files = glob.glob(os.path.join("docs", "*.txt"))
+        if not files:
+            st.warning("No documents found in the 'docs' folder!")
+            return None
 
-llm = HuggingFacePipeline(pipeline=pipe)
-qa_chain = load_qa_chain(llm, chain_type="stuff")
+        docs = []
+        for file in files:
+            loader = TextLoader(file)
+            docs.extend(loader.load())
 
-def answer_question_with_rag(query, vectordb):
-    context = retrieve_top_k(vectordb, query)
-    answer = qa_chain.run(input_documents=context, question=query)
-    return answer, context
+        splitter = CharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP
+        )
+        return splitter.split_documents(docs)
+    except Exception as e:
+        st.error(f"⚠️ Failed to load documents: {e}")
+        return None
 
-# --- Step 4: Agentic Workflow ---
-def is_tool_query(query):
-    return any(kw in query.lower() for kw in ["calculate", "compute", "define"])
+def initialize_vector_db(chunks):
+    """Initialize FAISS vector database."""
+    try:
+        embeddings = HuggingFaceEmbeddings()
+        return FAISS.from_documents(chunks, embeddings)
+    except Exception as e:
+        st.error(f"⚠️ Failed to create vector DB: {e}")
+        return None
 
-def use_tool(query):
-    if "calculate" in query.lower() or "compute" in query.lower():
-        try:
-            expression = query.lower().replace("calculate", "").replace("compute", "")
-            result = eval(expression)
-            return f"The result is: {result}"
-        except:
-            return "Sorry, I couldn’t compute that."
-    elif "define" in query.lower():
-        word = query.lower().split("define")[-1].strip()
-        return f"Definition of '{word}': [Dummy definition or dictionary API]"
-    return "Tool not found."
+def initialize_llm():
+    """Load Hugging Face LLM."""
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+        model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=200
+        )
+        return HuggingFacePipeline(pipeline=pipe)
+    except Exception as e:
+        st.error(f"⚠️ Failed to load LLM: {e}")
+        return None
 
-def agentic_query_handler(query, vectordb):
-    log = ""
-    if is_tool_query(query):
-        log = "Tool path taken."
-        response = use_tool(query)
-        context = []
-    else:
-        log = "RAG path taken."
-        response, context = answer_question_with_rag(query, vectordb)
-    return log, response, context
+def calculate(expression):
+    """Safe calculation using numexpr."""
+    try:
+        return f"🔢 Result: {evaluate(expression)}"
+    except:
+        return "❌ Calculation failed. Please check your input."
 
-# --- Step 5: Minimal Streamlit UI ---
-import streamlit as st
+def define_word(word):
+    """Fetch word definition using PyDictionary."""
+    try:
+        meanings = PyDictionary().meaning(word)
+        if meanings:
+            definition = "\n".join([f"📖 {k}: {', '.join(v)}" for k, v in meanings.items()])
+            return definition
+        else:
+            return f"❌ No definition found for '{word}'."
+    except:
+        return "❌ Dictionary service unavailable."
 
-st.title("RAG Multi-Agent Q&A Assistant (Hugging Face Edition)")
-user_query = st.text_input("Ask a question:")
+def retrieve_context(vectordb, query, k=3):
+    """Retrieve relevant text chunks."""
+    try:
+        return vectordb.similarity_search(query, k=k)
+    except Exception as e:
+        st.error(f"⚠️ Retrieval failed: {e}")
+        return []
 
-if user_query:
-    with st.spinner("Processing..."):
-        if "vectordb" not in st.session_state:
-            docs = ingest_documents()
-            st.session_state.vectordb = build_vector_store(docs)
-        log, answer, context = agentic_query_handler(user_query, st.session_state.vectordb)
+def generate_rag_answer(llm, query, context):
+    """Generate answer using RAG."""
+    try:
+        context_str = "\n".join([doc.page_content for doc in context])
+        prompt = f"""
+        Question: {query}
+        Context: {context_str}
+        Answer concisely:
+        """
+        return llm(prompt)
+    except Exception as e:
+        return f"❌ LLM Error: {e}"
 
-        st.markdown(f"**Agent Log:** {log}")
-        if context:
-            st.markdown("**Retrieved Context:**")
-            for doc in context:
-                st.text(doc.page_content)
-        st.markdown(f"**Answer:** {answer}")
+# --- Streamlit App ---
+def main():
+    st.title("🤖 RAG-Powered Q&A Assistant")
+    st.markdown("Ask a question or try: *'Calculate 5*5'*, *'Define AI'*")
+
+    # Initialize components
+    if "vectordb" not in st.session_state:
+        chunks = load_documents()
+        if chunks:
+            st.session_state.vectordb = initialize_vector_db(chunks)
+        st.session_state.llm = initialize_llm()
+
+    # User input
+    query = st.text_input("Your question:", placeholder="Type here...")
+
+    if query:
+        with st.spinner("🔍 Thinking..."):
+            # Agent decision: Tool or RAG?
+            if any(kw in query.lower() for kw in ["calculate", "compute", "define"]):
+                st.session_state.agent_path = "🛠️ Used Tool"
+                if "calculate" in query.lower() or "compute" in query.lower():
+                    expr = query.lower().replace("calculate", "").replace("compute", "").strip()
+                    response = calculate(expr)
+                else:
+                    word = query.lower().split("define")[-1].strip()
+                    response = define_word(word)
+                context = []
+            else:
+                st.session_state.agent_path = "📚 Used RAG"
+                context = retrieve_context(st.session_state.vectordb, query)
+                response = generate_rag_answer(st.session_state.llm, query, context)
+
+            # Display results
+            st.subheader("Agent Path")
+            st.code(st.session_state.agent_path)
+
+            if context:
+                st.subheader("Retrieved Context")
+                for i, doc in enumerate(context, 1):
+                    st.text_area(f"Context {i}", doc.page_content, height=100)
+
+            st.subheader("Answer")
+            st.write(response)
+
+if __name__ == "__main__":
+    main()
