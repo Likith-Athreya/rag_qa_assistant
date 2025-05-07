@@ -1,0 +1,4 @@
+Our SmartHome Hub v2 supports Zigbee, Z-Wave, and Wi-Fi protocols. 
+It is compatible with Amazon Alexa and Google Assistant.
+Battery life: 2 years on 4 AA batteries.
+Dimensions: 120mm x 120mm x 30mm.

@@ -1,0 +1,4 @@
+Step 1: Download the SmartHome app from the App Store or Google Play.
+Step 2: Plug in the hub and wait for the green LED to flash.
+Step 3: Open the app and tap 'Add New Device'.
+Step 4: Follow on-screen instructions to pair your devices.
